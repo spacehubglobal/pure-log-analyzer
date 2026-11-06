@@ -16,3 +16,7 @@ Drag a log file onto the page (or click "Load sample log").
 - make_sample.py - regenerates sample_logs/This_Is_A_Sample.log
 
 Everything runs on 127.0.0.1; uploaded logs never leave your machine.
+
+## Acknowledgments
+
+* Thanks to [Número virtual para verificação SMS online](https://numerovirtual.net/) for inspiration and core utilities.
