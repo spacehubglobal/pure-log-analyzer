@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Semantic Log Analyzer</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#1d2330;--muted:#6a7385;--line:#e3e6ec;--accent:#2f6fed;
+--Critical:#d93a3a;--Major:#ef8a17;--Minor:#e5c01c;--Info:#6b9bd1;
+--SIP:#2f6fed;--GTP:#12a594;--Diameter:#9b5de5}
+@media(prefers-color-scheme:dark){:root{--bg:#10141c;--card:#1a2030;--text:#e8ebf2;--muted:#8d97ad;--line:#2a3247}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:20px 28px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{margin:0;font-size:20px} header p{margin:4px 0 0;color:var(--muted);font-size:14px}
+main{max-width:1200px;margin:0 auto;padding:24px 28px 60px}
+#drop{border:2px dashed var(--line);border-radius:14px;padding:38px;text-align:center;background:var(--card);cursor:pointer;transition:.15s}
+#drop.over{border-color:var(--accent);background:rgba(47,111,237,.07)}
+#drop b{font-size:17px} #drop small{display:block;color:var(--muted);margin-top:6px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--text);padding:7px 14px;border-radius:8px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.kpi .v{font-size:28px;font-weight:700} .kpi .l{color:var(--muted);font-size:13px}
+.alert{border-left:5px solid var(--Critical);margin-bottom:22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 12px}
+.bar{display:grid;grid-template-columns:130px 1fr 44px;gap:10px;align-items:center;margin:6px 0;font-size:13px}
+.bar .t{height:16px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar .t i{display:block;height:100%;border-radius:4px}
+.bar .n{text-align:right;color:var(--muted)} .bar span.k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;color:#fff}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600} td.raw{font-family:Consolas,monospace;font-size:12px;word-break:break-all}
+.tablewrap{overflow-x:auto}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+select,input[type=search]{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+#err{color:var(--Critical);margin-top:12px}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header><h1>📡 Semantic Log Analyzer for Telecom Core Networks</h1>
+<p>Drop a SIP / GTP / Diameter log and see what went wrong - and what it means.</p></header>
+<main>
+<div id="drop"><b>Drag &amp; drop a log file here, or click to browse</b>
+<small>.log / .txt files &middot; processed locally on your machine</small>
+<input id="file" type="file" accept=".log,.txt,.csv" class="hidden"></div>
+<p><button id="sampleBtn">Load sample log</button> <span id="status" style="color:var(--muted);margin-left:8px"></span></p>
+<div id="err"></div>
+<div id="out" class="hidden"></div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const SEV={Critical:'#d93a3a',Major:'#ef8a17',Minor:'#e5c01c',Info:'#6b9bd1'};
+const PROTO={SIP:'#2f6fed',GTP:'#12a594',Diameter:'#9b5de5'};
+let R=null;
+
+const drop=$('#drop'),fileIn=$('#file');
+drop.onclick=()=>fileIn.click();
+fileIn.onchange=()=>fileIn.files[0]&&upload(fileIn.files[0]);
+['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',ev=>ev.dataTransfer.files[0]&&upload(ev.dataTransfer.files[0]));
+$('#sampleBtn').onclick=()=>run(fetch('/sample'),'This_Is_A_Sample.log');
+
+function upload(f){run(fetch('/analyze',{method:'POST',body:f}),f.name)}
+async function run(req,name){
+  $('#err').textContent='';$('#status').textContent='Analyzing...';
+  try{
+    const res=await req;const data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Request failed');
+    R=data;R.name=name;render();$('#status').textContent='';
+  }catch(e){$('#err').textContent='Error: '+e.message;$('#status').textContent=''}
+}
+
+function bars(obj,colorFn,limit){
+  const entries=Object.entries(obj).slice(0,limit||999);
+  if(!entries.length)return '<p style="color:var(--muted)">No data</p>';
+  const max=Math.max(...entries.map(e=>e[1]));
+  return entries.map(([k,v])=>`<div class="bar"><span class="k" title="${esc(k)}">${esc(k)}</span>
+  <div class="t"><i style="width:${v/max*100}%;background:${colorFn?colorFn(k):'var(--accent)'}"></i></div><span class="n">${v}</span></div>`).join('');
+}
+const badge=s=>`<span class="badge" style="background:${SEV[s]||'#888'}">${esc(s)}</span>`;
+
+function timeline(t){
+  if(!t)return '<p style="color:var(--muted)">No timestamps (YYYY-MM-DD HH:MM:SS) found in the log.</p>';
+  const W=640,H=170,pad=26,b=t.buckets,n=b.length;
+  const totals=b.map(x=>Object.values(x.counts).reduce((a,c)=>a+c,0));
+  const max=Math.max(...totals,1),bw=(W-pad)/n;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Errors over time">`;
+  b.forEach((x,i)=>{
+    let y=H-pad;
+    Object.entries(x.counts).forEach(([p,c])=>{
+      const h=c/max*(H-pad-10);y-=h;
+      svg+=`<rect x="${pad+i*bw+0.5}" y="${y}" width="${Math.max(bw-1,1)}" height="${h}" fill="${PROTO[p]||'#888'}"><title>${esc(x.t)} - ${p}: ${c}</title></rect>`;
+    });
+  });
+  svg+=`<line x1="${pad}" y1="${H-pad}" x2="${W}" y2="${H-pad}" stroke="var(--line)"/>
+  <text x="${pad}" y="${H-8}" font-size="10" fill="var(--muted)">${esc(b[0].t)}</text>
+  <text x="${W}" y="${H-8}" font-size="10" fill="var(--muted)" text-anchor="end">${esc(b[n-1].t)}</text>
+  <text x="2" y="12" font-size="10" fill="var(--muted)">${max}</text></svg>`;
+  const legend=Object.keys(PROTO).map(p=>`<span><i style="background:${PROTO[p]}"></i>${p}</span>`).join('');
+  return svg+`<div class="legend">${legend}<span>${t.step_minutes} min / bar</span></div>`;
+}
+
+function render(){
+  const out=$('#out');out.classList.remove('hidden');
+  if(!R.total_events){out.innerHTML=`<div class="card">Scanned ${R.total_lines.toLocaleString()} lines in <b>${esc(R.name)}</b> - no known error codes found. ✅</div>`;return}
+  const top=R.diagnosis[0],crit=R.by_severity.Critical||0;
+  out.innerHTML=`
+  <h2 style="font-size:17px;margin-top:20px">Analysis of ${esc(R.name)}</h2>
+  <div class="kpis">
+   <div class="card kpi"><div class="v">${R.total_lines.toLocaleString()}</div><div class="l">Lines scanned</div></div>
+   <div class="card kpi"><div class="v">${R.total_events.toLocaleString()}</div><div class="l">Error events</div></div>
+   <div class="card kpi"><div class="v">${R.distinct_codes}</div><div class="l">Distinct codes</div></div>
+   <div class="card kpi"><div class="v" style="color:var(--Critical)">${crit}</div><div class="l">Critical events</div></div>
+  </div>
+  <div class="card alert"><b>Top issue: ${esc(top.code)} (${esc(top.name)})</b> - ${top.count} occurrences ${badge(top.severity)}<br>
+   ${esc(top.meaning)}<br><b>Suggested action:</b> ${esc(top.action)}</div>
+  <div class="grid">
+   <div class="card"><h2>Error frequency by code</h2>${bars(Object.fromEntries(R.diagnosis.map(d=>[d.code,d.count])),k=>PROTO[k.split(' ')[0]],15)}</div>
+   <div class="card"><h2>Errors over time</h2>${timeline(R.timeline)}</div>
+   <div class="card"><h2>Severity</h2>${bars(Object.fromEntries(R.severity_order.filter(s=>R.by_severity[s]).map(s=>[s,R.by_severity[s]])),k=>SEV[k])}</div>
+   <div class="card"><h2>By category</h2>${bars(R.by_category)}</div>
+   <div class="card"><h2>By protocol</h2>${bars(R.by_protocol,k=>PROTO[k])}</div>
+   <div class="card"><h2>Top source IPs</h2>${bars(R.by_ip)}</div>
+  </div>
+  <div class="card" style="margin-bottom:16px"><h2>Diagnosis</h2><div class="tablewrap"><table>
+   <tr><th>Code</th><th>Name</th><th>Severity</th><th>Category</th><th>Meaning</th><th>Suggested action</th><th>Count</th></tr>
+   ${R.diagnosis.map(d=>`<tr><td><b>${esc(d.code)}</b></td><td>${esc(d.name)}</td><td>${badge(d.severity)}</td><td>${esc(d.category)}</td><td>${esc(d.meaning)}</td><td>${esc(d.action)}</td><td>${d.count}</td></tr>`).join('')}
+  </table></div></div>
+  <div class="card"><h2>Matching log lines${R.events_truncated?' (first 5,000 shown)':''}</h2>
+   <div class="filters">
+    <select id="fCode"><option value="">All codes</option>${R.diagnosis.map(d=>`<option>${esc(d.code)}</option>`).join('')}</select>
+    <select id="fSev"><option value="">All severities</option>${R.severity_order.map(s=>`<option>${s}</option>`).join('')}</select>
+    <input id="fText" type="search" placeholder="Search text / IP...">
+    <button id="csv">Download CSV</button>
+   </div>
+   <div class="tablewrap"><table id="evt"></table></div></div>`;
+  ['fCode','fSev','fText'].forEach(id=>$('#'+id).addEventListener('input',events));
+  $('#csv').onclick=csv;events();
+}
+
+function filtered(){
+  const c=$('#fCode').value,s=$('#fSev').value,t=$('#fText').value.toLowerCase();
+  return R.events.filter(e=>(!c||e.code===c)&&(!s||e.severity===s)&&(!t||(e.raw+e.ip).toLowerCase().includes(t)));
+}
+function events(){
+  const rows=filtered().slice(0,500);
+  $('#evt').innerHTML='<tr><th>Line</th><th>Time</th><th>Code</th><th>Severity</th><th>IP</th><th>Log text</th></tr>'+
+   rows.map(e=>`<tr><td>${e.line}</td><td>${esc(e.ts)}</td><td>${esc(e.code)}</td><td>${badge(e.severity)}</td><td>${esc(e.ip)}</td><td class="raw">${esc(e.raw)}</td></tr>`).join('');
+}
+function csv(){
+  const cols=['line','ts','protocol','code','name','severity','category','meaning','action','ip','raw'];
+  const q=v=>'"'+String(v).replace(/"/g,'""')+'"';
+  const text=[cols.join(',')].concat(filtered().map(e=>cols.map(c=>q(e[c])).join(','))).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/csv'}));
+  a.download='log_analysis.csv';a.click();
+}
+</script>
+</body>
+</html>
